@@ -285,7 +285,7 @@ struct GIFPreviewPlaybackTests {
             displayed.append(session.gifTimelineSelectedFrameIndex)
             session.pauseGIFForEditing(for: layerID)
         }
-        await session.playGIFTimeline(for: layerID)
+        await session.playGIFTimeline(for: layerID, clock: TestClock())
         #expect(displayed == [1])
         #expect(!session.gifTimelineIsLoadingFrame && !session.gifTimelineIsPlaying)
         #expect(session.importError == nil)
@@ -304,7 +304,7 @@ struct GIFPreviewPlaybackTests {
         await session.selectGIFTimelineFrame(0)
         session.toggleGIFPlayback(for: layerID)
         session.refreshCanvasPreview = { session.pauseGIFForEditing(for: layerID) }
-        await session.playGIFTimeline(for: layerID)
+        await session.playGIFTimeline(for: layerID, clock: TestClock())
         #expect(session.gifTimelineSelectedFrameIndex == 1)
         #expect(session.activeLayer.flatMap { session.displayedAsset(for: $0)?.image } === edited.image)
         session.undo()
