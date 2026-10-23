@@ -61,7 +61,7 @@ struct GIFTimeline: View {
                 }
             }
         }
-        // While playing, each frame shows for its delay and then the next, round and round.
+        // Decoding must not lengthen the layer's saved frame delays.
         .task(id: Playback(isPlaying: isPlaying, frames: frames.map(\.index), timing: timing)) { await play() }
         .onChange(of: canPlay) { if !canPlay, isPlaying { onStopPlayback() } }
         .onDisappear { onStopPlayback() }
@@ -73,15 +73,16 @@ struct GIFTimeline: View {
         let timing: GIFFrameTiming
     }
 
-    private func play() async {
+    func play<C: Clock>(clock: C = ContinuousClock()) async where C.Duration == Duration {
         guard isPlaying, frames.count > 1 else { return }
-        var position = frames.firstIndex { $0.index == selectedFrameIndex } ?? 0
-        while !Task.isCancelled {
-            let delay = max(GIFTimelineLimits.minimumFrameDuration, timing.delay(for: frames[position]))
-            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-            position = (position + 1) % frames.count
-            await onSelectFrame(frames[position].index)
-        }
+        let durations = frames.map { max(GIFTimelineLimits.minimumFrameDuration, timing.delay(for: $0)) }
+        let initial = frames.firstIndex { $0.index == selectedFrameIndex } ?? 0
+        do {
+            try await GIFPreviewPlayback.play(durations: durations, startingAt: initial, clock: clock) { position in
+                await onSelectFrame(frames[position].index)
+            }
+        } catch is CancellationError { }
+        catch { onStopPlayback() }
     }
 
     private func thumbnail(_ frame: GIFTimelineFrame, number: Int) -> some View {

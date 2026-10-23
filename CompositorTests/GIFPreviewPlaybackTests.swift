@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Synchronization
 import Testing
@@ -123,5 +124,59 @@ struct GIFPreviewPlaybackTests {
         await request.value
         #expect(session.gifTimelineSelectedFrameIndex == 0)
         #expect(!session.gifTimelineIsLoadingFrame && session.importError == nil)
+    }
+
+    private func timeline(indices: [Int], durations: [Double], startingAt initial: Int = 0,
+                          timing: GIFFrameTiming = GIFFrameTiming(), isPlaying: Bool = true,
+                          showFrame: @escaping (Int) async -> Void) throws -> GIFTimeline {
+        let thumbnail = try #require(BrushRaster.context(width: 1, height: 1, mask: false).makeImage())
+        let frames = zip(indices, durations).map { GIFTimelineFrame(index: $0, thumbnail: thumbnail, duration: $1) }
+        return GIFTimeline(frames: frames, selectedFrameIndex: initial, isPlaying: isPlaying, canPlay: true,
+                           timing: timing, canEditFrames: true, canEditTiming: true, onSelectFrame: showFrame,
+                           onTogglePlayback: {}, onStopPlayback: {}, onChangeTiming: { _ in },
+                           onDuplicateFrame: { _ in }, onDeleteFrame: { _ in })
+    }
+
+    @Test(arguments: [GIFDelayMode.perFrame, .uniform])
+    func timelineKeepsSavedTimingAndStableFrameIdentities(mode: GIFDelayMode) async throws {
+        let clock = TestClock()
+        var frames: [Int] = [], times: [Double] = []
+        var timing = GIFFrameTiming()
+        timing.mode = mode
+        timing.uniformDelay = 0.1
+        let view = try timeline(indices: [0, 4, 2, 3], durations: [0.04, 0.16, 0.08, 0.24],
+                                startingAt: 4, timing: timing) { index in
+            frames.append(index)
+            times.append(clock.elapsed)
+            clock.advance(by: .milliseconds(30))
+            if frames.count == 3 { withUnsafeCurrentTask { $0?.cancel() } }
+        }
+        await Task { await view.play(clock: clock) }.value
+        #expect(frames == [2, 3, 0])
+        let expected = mode == .uniform ? [0.1, 0.2, 0.3] : [0.16, 0.24, 0.48]
+        for (time, deadline) in zip(times, expected) { #expect(abs(time - deadline) < 1e-9) }
+    }
+
+    @Test func timelineSkipsExpiredFramesAfterSlowDecode() async throws {
+        let clock = TestClock()
+        var frames: [Int] = [], times: [Double] = []
+        let view = try timeline(indices: [0, 4, 2, 3], durations: [0.1, 0.1, 0.1, 0.1]) { index in
+            frames.append(index)
+            times.append(clock.elapsed)
+            clock.advance(by: .milliseconds(250))
+            if frames.count == 2 { withUnsafeCurrentTask { $0?.cancel() } }
+        }
+        await Task { await view.play(clock: clock) }.value
+        #expect(frames == [4, 3])
+        for (time, deadline) in zip(times, [0.1, 0.35]) { #expect(abs(time - deadline) < 1e-9) }
+    }
+
+    @Test func pausedTimelineDoesNotDecodeFrames() async throws {
+        let clock = TestClock()
+        let view = try timeline(indices: [0, 1], durations: [0.1, 0.1], isPlaying: false) { _ in
+            Issue.record("A paused timeline must not request a frame")
+        }
+        await view.play(clock: clock)
+        #expect(clock.sleeps == 0)
     }
 }
