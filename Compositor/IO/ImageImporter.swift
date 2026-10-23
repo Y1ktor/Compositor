@@ -204,7 +204,10 @@ actor ImageImporter {
     }
 
     func decodeGIFFrame(_ animation: GIFAnimation, index: Int, name: String) throws -> ImportedImage {
-        try GIFDecoder.frame(animation, index: index, name: name)
+        try Task.checkCancellation()
+        let frame = try GIFDecoder.frame(animation, index: index, name: name)
+        try Task.checkCancellation()
+        return frame
     }
 
     func loadPhotoshop(_ url: URL, remainingPixels: Int = DocumentLimits.documentPixelBudget) throws -> PSDDocument {

@@ -1120,6 +1120,51 @@ final class EditorSession {
         isLoadingGIFFrame = false
     }
 
+    /// The UI task owns playback's lifetime; prepared frames stay outside the document and its history.
+    func playGIFTimeline<C: Clock>(for layerID: UUID, clock: C = ContinuousClock()) async where C.Duration == Duration {
+        guard activeLayerID == layerID, let layer = activeLayer, var animation = layer.gifAnimation,
+              let timeline = gifTimeline(for: layer), timeline.isPlaying else { return }
+        let frames = animation.frames
+        guard frames.count > 1 else { return }
+        let initial = frames.firstIndex { $0.index == timeline.selectedFrameIndex } ?? 0
+        let references = animation.frameReferences
+        // Keep raw source pixels available for Undo; displayedAsset applies any edited frame separately.
+        animation.framePixels = [:]
+        let sourceAnimation = animation
+        let decoder = GIFPlaybackDecoder(sourceAnimation, name: layer.name)
+        let capacity = GIFPlaybackBufferLimits.capacity(width: animation.geometry?.width ?? animation.source.width,
+            height: animation.geometry?.height ?? animation.source.height, frameCount: frames.count)
+        let requestID = UUID()
+        gifFrameSelectionRequestID = requestID
+        isLoadingGIFFrame = false
+        defer {
+            if gifFrameSelectionRequestID == requestID { gifFrameSelectionRequestID = nil }
+        }
+        do {
+            try await GIFPreviewPlayback.play(durations: frames.map(\.duration), startingAt: initial,
+                capacity: capacity, clock: clock, prepareFrame: { position in
+                    try await decoder.frame(at: frames[position].index)
+                }, showFrame: { position, asset in
+                    let index = frames[position].index
+                    guard self.gifFrameSelectionRequestID == requestID, self.activeLayerID == layerID,
+                          let currentLayer = self.activeLayer, let current = currentLayer.gifAnimation,
+                          current.source === sourceAnimation.source, current.geometry == sourceAnimation.geometry,
+                          current.frameReferences == references, current.timing == sourceAnimation.timing,
+                          var state = self.gifTimeline(for: currentLayer), state.isPlaying else { throw CancellationError() }
+                    state.selectedFrameIndex = index
+                    state.sourceFrameIndex = references[position].sourceIndex
+                    state.displayedAsset = asset
+                    self.gifTimelinesByLayerID[layerID] = state
+                    self.refreshCanvasPreview?()
+                })
+        } catch is CancellationError { }
+        catch {
+            guard gifFrameSelectionRequestID == requestID else { return }
+            stopGIFPlayback(for: layerID)
+            importError = "Couldn’t read GIF frame: \(error.localizedDescription)"
+        }
+    }
+
     func selectGIFTimelineFrame(_ index: Int) async {
         guard let layerID = gifTimelineLayerID,
               let layer = activeLayer, let animation = layer.gifAnimation, let timeline = gifTimeline(for: layer),
@@ -1153,13 +1198,13 @@ final class EditorSession {
             currentTimeline.displayedAsset = asset
             gifTimelinesByLayerID[layerID] = currentTimeline
             refreshCanvasPreview?()
-        } catch {
+        } catch is CancellationError { }
+        catch {
             guard gifFrameSelectionRequestID == requestID else { return }
             importError = "Couldn’t read GIF frame \(index + 1): \(error.localizedDescription)"
         }
     }
 
-    /// The UI task owns playback's lifetime. Only per-layer runtime previews change, together after decoding.
     /// Puts the sheet up before the file is read, so a big PSD doesn't leave the click unanswered.
     /// `finishPSDReading` fills it in, or takes it away when there is nothing to report.
     func beginPSDReading(title: String, confirmTitle: String) {

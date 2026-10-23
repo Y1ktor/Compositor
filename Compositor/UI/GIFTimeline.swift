@@ -11,6 +11,7 @@ struct GIFTimeline: View {
     let canEditFrames: Bool
     let canEditTiming: Bool
     let onSelectFrame: (Int) async -> Void
+    let onPlay: () async -> Void
     let onTogglePlayback: () -> Void
     let onStopPlayback: () -> Void
     let onChangeTiming: (GIFFrameTiming) -> Void
@@ -62,7 +63,9 @@ struct GIFTimeline: View {
             }
         }
         // Decoding must not lengthen the layer's saved frame delays.
-        .task(id: Playback(isPlaying: isPlaying, frames: frames.map(\.index), timing: timing)) { await play() }
+        .task(id: Playback(isPlaying: isPlaying, frames: frames.map(\.index), timing: timing)) {
+            if isPlaying { await onPlay() }
+        }
         .onChange(of: canPlay) { if !canPlay, isPlaying { onStopPlayback() } }
         .onDisappear { onStopPlayback() }
     }
@@ -71,18 +74,6 @@ struct GIFTimeline: View {
         let isPlaying: Bool
         let frames: [Int]
         let timing: GIFFrameTiming
-    }
-
-    func play<C: Clock>(clock: C = ContinuousClock()) async where C.Duration == Duration {
-        guard isPlaying, frames.count > 1 else { return }
-        let durations = frames.map { max(GIFTimelineLimits.minimumFrameDuration, timing.delay(for: $0)) }
-        let initial = frames.firstIndex { $0.index == selectedFrameIndex } ?? 0
-        do {
-            try await GIFPreviewPlayback.play(durations: durations, startingAt: initial, clock: clock) { position in
-                await onSelectFrame(frames[position].index)
-            }
-        } catch is CancellationError { }
-        catch { onStopPlayback() }
     }
 
     private func thumbnail(_ frame: GIFTimelineFrame, number: Int) -> some View {

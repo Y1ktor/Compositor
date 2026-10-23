@@ -136,6 +136,7 @@ struct ContentView: View {
                                         guard session.activeLayerID == gifLayerID else { return }
                                         await session.selectGIFTimelineFrame(index)
                                     },
+                                    onPlay: { await session.playGIFTimeline(for: gifLayerID) },
                                     onTogglePlayback: { session.toggleGIFPlayback(for: gifLayerID) },
                                     onStopPlayback: { session.stopGIFPlayback(for: gifLayerID) },
                                     onChangeTiming: { session.setGIFFrameTiming($0, for: gifLayerID) },
